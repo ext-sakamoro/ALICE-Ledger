@@ -146,7 +146,27 @@ impl OrderBook {
     /// Submit an order for matching and, if a remainder exists, resting on the book.
     ///
     /// Returns the list of fills produced by this submission.
-    pub fn insert(&mut self, mut order: Order) -> Vec<Fill> {
+    ///
+    /// GTD orders whose `expiry_ns` is less than or equal to `now_ns` are
+    /// rejected immediately (zero fills, never rested). Pass `now_ns = 0` to
+    /// skip the expiry check (useful in tests that do not care about time).
+    pub fn insert(&mut self, order: Order) -> Vec<Fill> {
+        self.insert_with_time(order, 0)
+    }
+
+    /// Variant of [`insert`] that applies the GTD expiry check against
+    /// `now_ns` (nanoseconds since the Unix epoch).
+    ///
+    /// If the order is GTD and `expiry_ns <= now_ns`, the order is silently
+    /// discarded and an empty fill list is returned.
+    pub fn insert_with_time(&mut self, mut order: Order, now_ns: u64) -> Vec<Fill> {
+        // --- GTD pre-check: reject already-expired orders ---
+        if let TimeInForce::GTD { expiry_ns } = order.time_in_force {
+            if now_ns > 0 && expiry_ns <= now_ns {
+                return Vec::new();
+            }
+        }
+
         let mut fills = Vec::new();
 
         // --- attempt to match against the opposite side ---
@@ -199,13 +219,13 @@ impl OrderBook {
         if let Some(ref order) = cancelled {
             match side {
                 Side::Bid => {
-                    if self.bids.get(&Reverse(price)).map_or(true, |l| l.is_empty()) {
+                    if self.bids.get(&Reverse(price)).is_none_or(|l| l.is_empty()) {
                         self.bids.remove(&Reverse(price));
                     }
                     let _ = order; // already moved
                 }
                 Side::Ask => {
-                    if self.asks.get(&price).map_or(true, |l| l.is_empty()) {
+                    if self.asks.get(&price).is_none_or(|l| l.is_empty()) {
                         self.asks.remove(&price);
                     }
                 }
@@ -215,6 +235,50 @@ impl OrderBook {
         cancelled
     }
 
+    /// Remove all resting GTD orders whose `expiry_ns` is less than or equal
+    /// to `now_ns` (nanoseconds since the Unix epoch).
+    ///
+    /// Returns the list of cancelled orders so callers can send cancellation
+    /// acknowledgements or generate audit records.
+    ///
+    /// Complexity: O(n) in the number of resting orders, which is acceptable
+    /// for the periodic housekeeping cadence at which this is typically called.
+    pub fn purge_expired(&mut self, now_ns: u64) -> Vec<Order> {
+        let mut expired: Vec<Order> = Vec::new();
+
+        // Collect (side, price, order_id) tuples for every expired GTD order.
+        let mut to_remove: Vec<(Side, i64, OrderId)> = Vec::new();
+
+        for (Reverse(price), level) in &self.bids {
+            for order in &level.orders {
+                if let TimeInForce::GTD { expiry_ns } = order.time_in_force {
+                    if expiry_ns <= now_ns {
+                        to_remove.push((Side::Bid, *price, order.id));
+                    }
+                }
+            }
+        }
+
+        for (price, level) in &self.asks {
+            for order in &level.orders {
+                if let TimeInForce::GTD { expiry_ns } = order.time_in_force {
+                    if expiry_ns <= now_ns {
+                        to_remove.push((Side::Ask, *price, order.id));
+                    }
+                }
+            }
+        }
+
+        // Remove each expired order via the existing cancel path.
+        for (_side, _price, id) in to_remove {
+            if let Some(order) = self.cancel(id) {
+                expired.push(order);
+            }
+        }
+
+        expired
+    }
+
     // -----------------------------------------------------------------------
     // Private matching helpers
     // -----------------------------------------------------------------------
@@ -222,10 +286,8 @@ impl OrderBook {
     /// Match an incoming bid against resting asks, from lowest ask price up.
     fn match_bid(&mut self, taker: &mut Order, fills: &mut Vec<Fill>) {
         // For FOK we must verify full fill is possible before executing.
-        if taker.time_in_force == TimeInForce::FOK {
-            if !self.can_fill_bid(taker) {
-                return; // Cancel without any execution.
-            }
+        if taker.time_in_force == TimeInForce::FOK && !self.can_fill_bid(taker) {
+            return; // Cancel without any execution.
         }
 
         let taker_price = match taker.order_type {
@@ -255,7 +317,7 @@ impl OrderBook {
                 &mut self.order_index,
             );
             // Remove the level if exhausted.
-            if self.asks.get(&ask_price).map_or(false, |l| l.is_empty()) {
+            if self.asks.get(&ask_price).is_some_and(|l| l.is_empty()) {
                 self.asks.remove(&ask_price);
             }
         }
@@ -263,10 +325,8 @@ impl OrderBook {
 
     /// Match an incoming ask against resting bids, from highest bid price down.
     fn match_ask(&mut self, taker: &mut Order, fills: &mut Vec<Fill>) {
-        if taker.time_in_force == TimeInForce::FOK {
-            if !self.can_fill_ask(taker) {
-                return;
-            }
+        if taker.time_in_force == TimeInForce::FOK && !self.can_fill_ask(taker) {
+            return;
         }
 
         let taker_price = match taker.order_type {
@@ -295,7 +355,7 @@ impl OrderBook {
                 fills,
                 &mut self.order_index,
             );
-            if self.bids.get(&Reverse(bid_price)).map_or(false, |l| l.is_empty()) {
+            if self.bids.get(&Reverse(bid_price)).is_some_and(|l| l.is_empty()) {
                 self.bids.remove(&Reverse(bid_price));
             }
         }
@@ -693,5 +753,110 @@ mod tests {
         assert_eq!(fills[0].quantity, 5);
         // The bid side should remain empty.
         assert!(book.best_bid().is_none());
+    }
+
+    // --- GTD ---
+
+    fn gtd(id: u64, side: Side, price: i64, qty: u64, ts: u64, expiry_ns: u64) -> Order {
+        Order {
+            id: OrderId(id),
+            side,
+            order_type: OrderType::Limit,
+            price,
+            quantity: qty,
+            filled_quantity: 0,
+            timestamp_ns: ts,
+            time_in_force: TimeInForce::GTD { expiry_ns },
+        }
+    }
+
+    #[test]
+    fn gtd_rests_on_book_when_not_yet_expired() {
+        let mut book = OrderBook::new();
+        // expiry = 1000, now = 500 → still valid
+        let fills = book.insert_with_time(gtd(1, Side::Bid, 990, 10, 0, 1_000), 500);
+        assert!(fills.is_empty());
+        assert_eq!(book.best_bid(), Some(990));
+    }
+
+    #[test]
+    fn gtd_rejected_immediately_when_already_expired() {
+        let mut book = OrderBook::new();
+        // expiry = 500, now = 1000 → already expired
+        let fills = book.insert_with_time(gtd(1, Side::Bid, 990, 10, 0, 500), 1_000);
+        assert!(fills.is_empty());
+        assert!(book.best_bid().is_none()); // must not have rested
+    }
+
+    #[test]
+    fn gtd_rejected_at_exact_expiry_boundary() {
+        let mut book = OrderBook::new();
+        // expiry == now → expired
+        let fills = book.insert_with_time(gtd(1, Side::Ask, 1000, 5, 0, 1_000), 1_000);
+        assert!(fills.is_empty());
+        assert!(book.best_ask().is_none());
+    }
+
+    #[test]
+    fn purge_expired_removes_gtd_orders_past_expiry() {
+        let mut book = OrderBook::new();
+        // Two GTD orders on the bid side with different expiries.
+        book.insert_with_time(gtd(1, Side::Bid, 990, 10, 0, 500), 0); // expires at 500 ns
+        book.insert_with_time(gtd(2, Side::Bid, 995, 5, 1, 2_000), 0); // expires at 2000 ns
+        // One GTC order that must survive.
+        book.insert(limit(3, Side::Bid, 992, 3, 2));
+
+        // At now = 1000 ns only order #1 (expiry=500) has expired.
+        let expired = book.purge_expired(1_000);
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].id, OrderId(1));
+
+        // Best bid is now 995 (order #2), and the GTC at 992 is still present.
+        assert_eq!(book.best_bid(), Some(995));
+        let depth = book.depth(Side::Bid, 3);
+        assert_eq!(depth.len(), 2); // 995 and 992
+    }
+
+    #[test]
+    fn purge_expired_removes_gtd_on_ask_side() {
+        let mut book = OrderBook::new();
+        book.insert_with_time(gtd(1, Side::Ask, 1000, 10, 0, 100), 0); // expires at 100 ns
+        book.insert_with_time(gtd(2, Side::Ask, 1001, 5, 1, 5_000), 0); // expires at 5000 ns
+
+        let expired = book.purge_expired(200);
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].id, OrderId(1));
+        assert_eq!(book.best_ask(), Some(1001));
+    }
+
+    #[test]
+    fn purge_expired_leaves_gtc_orders_untouched() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Ask, 1000, 10, 0)); // GTC — must survive any purge
+        let expired = book.purge_expired(u64::MAX);
+        assert!(expired.is_empty());
+        assert_eq!(book.best_ask(), Some(1000));
+    }
+
+    #[test]
+    fn purge_expired_returns_empty_when_nothing_expired() {
+        let mut book = OrderBook::new();
+        // expiry = 2000, now = 1000 → still valid
+        book.insert_with_time(gtd(1, Side::Bid, 990, 10, 0, 2_000), 0);
+        let expired = book.purge_expired(1_000);
+        assert!(expired.is_empty());
+        assert_eq!(book.best_bid(), Some(990));
+    }
+
+    #[test]
+    fn gtd_order_fills_normally_before_expiry() {
+        let mut book = OrderBook::new();
+        // Resting GTD ask at 1000, expires far in the future.
+        book.insert_with_time(gtd(1, Side::Ask, 1000, 10, 0, 9_999_999), 0);
+        // Market bid hits it before expiry.
+        let fills = book.insert_with_time(market(2, Side::Bid, 10), 500);
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].price, 1000);
+        assert_eq!(fills[0].quantity, 10);
     }
 }

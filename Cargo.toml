@@ -1,0 +1,32 @@
+[package]
+name = "alice-ledger"
+version = "0.1.0"
+edition = "2021"
+authors = ["Moroya Sakamoto"]
+description = "Order book, matching engine, and position management for financial systems"
+license = "AGPL-3.0-only"
+publish = false
+
+[lib]
+name = "alice_ledger"
+crate-type = ["rlib"]
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+alice-sync = { path = "../ALICE-Sync", features = ["telemetry"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = false

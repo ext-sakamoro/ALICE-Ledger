@@ -104,8 +104,7 @@ impl PositionTracker {
             return;
         }
 
-        let same_direction = (prev_net > 0 && signed_qty > 0)
-            || (prev_net < 0 && signed_qty < 0);
+        let same_direction = (prev_net > 0 && signed_qty > 0) || (prev_net < 0 && signed_qty < 0);
 
         if same_direction {
             // Adding to an existing position — update weighted average entry.
@@ -227,7 +226,7 @@ mod tests {
     fn partial_close_long_realizes_pnl() {
         let mut tracker = PositionTracker::new();
         tracker.apply_fill(SYM, &fill(1000, 10), Side::Bid); // long 10 @ 1000
-        tracker.apply_fill(SYM, &fill(1010, 5), Side::Ask);  // sell 5 @ 1010
+        tracker.apply_fill(SYM, &fill(1010, 5), Side::Ask); // sell 5 @ 1010
 
         let pos = tracker.get(SYM).unwrap();
         assert_eq!(pos.net_quantity, 5); // 5 lots remain long
@@ -267,7 +266,7 @@ mod tests {
     fn close_short_with_profit() {
         let mut tracker = PositionTracker::new();
         tracker.apply_fill(SYM, &fill(1000, 10), Side::Ask); // short 10 @ 1000
-        tracker.apply_fill(SYM, &fill(990, 10), Side::Bid);   // cover @ 990
+        tracker.apply_fill(SYM, &fill(990, 10), Side::Bid); // cover @ 990
 
         let pos = tracker.get(SYM).unwrap();
         assert_eq!(pos.net_quantity, 0);
@@ -280,8 +279,8 @@ mod tests {
     #[test]
     fn flip_long_to_short() {
         let mut tracker = PositionTracker::new();
-        tracker.apply_fill(SYM, &fill(1000, 10), Side::Bid);  // long 10
-        tracker.apply_fill(SYM, &fill(1005, 15), Side::Ask);  // sell 15
+        tracker.apply_fill(SYM, &fill(1000, 10), Side::Bid); // long 10
+        tracker.apply_fill(SYM, &fill(1005, 15), Side::Ask); // sell 15
 
         let pos = tracker.get(SYM).unwrap();
         // After closing 10 longs (realized 5*10=50) and opening 5 shorts.

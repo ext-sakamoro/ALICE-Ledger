@@ -13,8 +13,8 @@
 //! Within a price level, orders are stored in a `VecDeque` in arrival order,
 //! giving strict FIFO (first-in, first-out) time priority.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::cmp::Reverse;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use crate::order::{Order, OrderId, OrderType, Side, TimeInForce};
 
@@ -154,7 +154,7 @@ impl OrderBook {
         self.insert_with_time(order, 0)
     }
 
-    /// Variant of [`insert`] that applies the GTD expiry check against
+    /// Variant of [`Self::insert`] that applies the GTD expiry check against
     /// `now_ns` (nanoseconds since the Unix epoch).
     ///
     /// If the order is GTD and `expiry_ns <= now_ns`, the order is silently
@@ -296,11 +296,7 @@ impl OrderBook {
         };
 
         // Collect keys to avoid borrowing issues.
-        let keys: Vec<i64> = self
-            .asks
-            .range(..=taker_price)
-            .map(|(k, _)| *k)
-            .collect();
+        let keys: Vec<i64> = self.asks.range(..=taker_price).map(|(k, _)| *k).collect();
 
         for ask_price in keys {
             if taker.is_filled() {
@@ -355,7 +351,11 @@ impl OrderBook {
                 fills,
                 &mut self.order_index,
             );
-            if self.bids.get(&Reverse(bid_price)).is_some_and(|l| l.is_empty()) {
+            if self
+                .bids
+                .get(&Reverse(bid_price))
+                .is_some_and(|l| l.is_empty())
+            {
                 self.bids.remove(&Reverse(bid_price));
             }
         }
@@ -803,7 +803,7 @@ mod tests {
         // Two GTD orders on the bid side with different expiries.
         book.insert_with_time(gtd(1, Side::Bid, 990, 10, 0, 500), 0); // expires at 500 ns
         book.insert_with_time(gtd(2, Side::Bid, 995, 5, 1, 2_000), 0); // expires at 2000 ns
-        // One GTC order that must survive.
+                                                                       // One GTC order that must survive.
         book.insert(limit(3, Side::Bid, 992, 3, 2));
 
         // At now = 1000 ns only order #1 (expiry=500) has expired.

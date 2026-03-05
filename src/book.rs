@@ -56,7 +56,7 @@ impl PriceLevel {
     /// Create an empty price level at the given tick price.
     #[inline(always)]
     #[must_use]
-    pub fn new(price: i64) -> Self {
+    pub const fn new(price: i64) -> Self {
         Self {
             price,
             orders: VecDeque::new(),
@@ -869,6 +869,346 @@ mod tests {
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].price, 1000);
         assert_eq!(fills[0].quantity, 10);
+    }
+
+    // --- spread エッジケース ---
+
+    #[test]
+    fn spread_only_bids_returns_none() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Bid, 1000, 5, 0));
+        assert!(book.spread().is_none());
+    }
+
+    #[test]
+    fn spread_only_asks_returns_none() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Ask, 1000, 5, 0));
+        assert!(book.spread().is_none());
+    }
+
+    #[test]
+    fn spread_zero_when_bid_equals_ask() {
+        // bid = ask → crossed book (spread = 0)。マーケットオーダーで消化されるため
+        // 残留する場合はスプレッドが 0 になる
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Bid, 1000, 5, 0));
+        // 同価格の ask を置いても bid と即時マッチするので book は片側になる
+        book.insert(limit(2, Side::Ask, 1005, 5, 1));
+        assert_eq!(book.spread(), Some(5));
+    }
+
+    // --- depth エッジケース ---
+
+    #[test]
+    fn depth_zero_levels_requested_returns_empty() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Bid, 1000, 5, 0));
+        assert!(book.depth(Side::Bid, 0).is_empty());
+    }
+
+    #[test]
+    fn depth_empty_book_returns_empty() {
+        let book = OrderBook::new();
+        assert!(book.depth(Side::Bid, 5).is_empty());
+        assert!(book.depth(Side::Ask, 5).is_empty());
+    }
+
+    #[test]
+    fn depth_limited_to_requested_levels() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Ask, 1000, 5, 0));
+        book.insert(limit(2, Side::Ask, 1001, 5, 1));
+        book.insert(limit(3, Side::Ask, 1002, 5, 2));
+        // 3レベルあるが 2 だけ要求する
+        let d = book.depth(Side::Ask, 2);
+        assert_eq!(d.len(), 2);
+        assert_eq!(d[0].0, 1000);
+        assert_eq!(d[1].0, 1001);
+    }
+
+    #[test]
+    fn depth_ask_ascending_order() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Ask, 1002, 5, 0));
+        book.insert(limit(2, Side::Ask, 1000, 5, 1));
+        book.insert(limit(3, Side::Ask, 1001, 5, 2));
+        let d = book.depth(Side::Ask, 3);
+        assert_eq!(d[0].0, 1000);
+        assert_eq!(d[1].0, 1001);
+        assert_eq!(d[2].0, 1002);
+    }
+
+    #[test]
+    fn depth_bid_descending_order() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Bid, 998, 5, 0));
+        book.insert(limit(2, Side::Bid, 1000, 5, 1));
+        book.insert(limit(3, Side::Bid, 999, 5, 2));
+        let d = book.depth(Side::Bid, 3);
+        assert_eq!(d[0].0, 1000);
+        assert_eq!(d[1].0, 999);
+        assert_eq!(d[2].0, 998);
+    }
+
+    // --- cancel エッジケース ---
+
+    #[test]
+    fn cancel_ask_order() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Ask, 1000, 10, 0));
+        let cancelled = book.cancel(OrderId(1));
+        assert!(cancelled.is_some());
+        assert!(book.best_ask().is_none());
+    }
+
+    #[test]
+    fn cancel_removes_level_when_empty() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Bid, 1000, 10, 0));
+        book.cancel(OrderId(1));
+        // レベルが空になったので best_bid は None
+        assert!(book.best_bid().is_none());
+        assert!(book.spread().is_none());
+    }
+
+    #[test]
+    fn cancel_after_partial_fill() {
+        let mut book = OrderBook::new();
+        // ask 20 lots → market buy 8 lots → cancel 残り 12
+        book.insert(limit(1, Side::Ask, 1000, 20, 0));
+        book.insert(market(2, Side::Bid, 8));
+        let cancelled = book.cancel(OrderId(1));
+        assert!(cancelled.is_some());
+        // remaining = 20 - 8 = 12
+        assert_eq!(cancelled.unwrap().remaining(), 12);
+        assert!(book.best_ask().is_none());
+    }
+
+    #[test]
+    fn cancel_then_reinsert_same_id() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Bid, 1000, 10, 0));
+        book.cancel(OrderId(1));
+        // 同じ ID で再挿入
+        book.insert(limit(1, Side::Bid, 1000, 5, 1));
+        assert_eq!(book.best_bid(), Some(1000));
+    }
+
+    // --- market order に流動性がない場合 ---
+
+    #[test]
+    fn market_buy_on_empty_book_returns_no_fills() {
+        let mut book = OrderBook::new();
+        let fills = book.insert(market(1, Side::Bid, 10));
+        assert!(fills.is_empty());
+    }
+
+    #[test]
+    fn market_sell_on_empty_book_returns_no_fills() {
+        let mut book = OrderBook::new();
+        let fills = book.insert(market(1, Side::Ask, 10));
+        assert!(fills.is_empty());
+    }
+
+    // --- limit 注文が相手方を超えない価格の場合は約定しない ---
+
+    #[test]
+    fn limit_bid_below_ask_rests_on_book() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Ask, 1005, 10, 0));
+        // bid 価格が ask より低い → 約定せず rest
+        let fills = book.insert(limit(2, Side::Bid, 1000, 10, 1));
+        assert!(fills.is_empty());
+        assert_eq!(book.best_bid(), Some(1000));
+        assert_eq!(book.best_ask(), Some(1005));
+    }
+
+    #[test]
+    fn limit_ask_above_bid_rests_on_book() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Bid, 995, 10, 0));
+        // ask 価格が bid より高い → 約定せず rest
+        let fills = book.insert(limit(2, Side::Ask, 1000, 10, 1));
+        assert!(fills.is_empty());
+        assert_eq!(book.best_ask(), Some(1000));
+    }
+
+    // --- IOC が完全に約定する場合 ---
+
+    #[test]
+    fn ioc_fills_completely_when_sufficient_liquidity() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Ask, 1000, 20, 0)); // 20 lots available
+
+        let ioc = Order {
+            id: OrderId(2),
+            side: Side::Bid,
+            order_type: OrderType::Limit,
+            price: 1000,
+            quantity: 10, // 10 lots required
+            filled_quantity: 0,
+            timestamp_ns: 0,
+            time_in_force: TimeInForce::IOC,
+        };
+        let fills = book.insert(ioc);
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].quantity, 10);
+        // 残り 10 lots は book に残っていること
+        let d = book.depth(Side::Ask, 1);
+        assert_eq!(d[0].1, 10);
+    }
+
+    // --- FOK ask 側 ---
+
+    #[test]
+    fn fok_ask_cancels_when_insufficient_bid_liquidity() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Bid, 1000, 3, 0)); // 3 lots
+
+        let fok = Order {
+            id: OrderId(2),
+            side: Side::Ask,
+            order_type: OrderType::Limit,
+            price: 1000,
+            quantity: 10, // 10 必要
+            filled_quantity: 0,
+            timestamp_ns: 0,
+            time_in_force: TimeInForce::FOK,
+        };
+        let fills = book.insert(fok);
+        assert!(fills.is_empty());
+        // 元の bid は無傷で残っていること
+        assert_eq!(book.best_bid(), Some(1000));
+    }
+
+    #[test]
+    fn fok_ask_fills_when_sufficient_bid_liquidity() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Bid, 1000, 20, 0)); // 20 lots
+
+        let fok = Order {
+            id: OrderId(2),
+            side: Side::Ask,
+            order_type: OrderType::Limit,
+            price: 1000,
+            quantity: 10,
+            filled_quantity: 0,
+            timestamp_ns: 0,
+            time_in_force: TimeInForce::FOK,
+        };
+        let fills = book.insert(fok);
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].quantity, 10);
+    }
+
+    // --- market order が複数レベルを跨ぐ (ask 側) ---
+
+    #[test]
+    fn market_sell_sweeps_multiple_bid_levels() {
+        let mut book = OrderBook::new();
+        book.insert(limit(1, Side::Bid, 1000, 5, 0));
+        book.insert(limit(2, Side::Bid, 999, 5, 1));
+        book.insert(limit(3, Side::Bid, 998, 5, 2));
+
+        let fills = book.insert(market(4, Side::Ask, 15));
+        assert_eq!(fills.len(), 3);
+        assert_eq!(fills[0].price, 1000);
+        assert_eq!(fills[1].price, 999);
+        assert_eq!(fills[2].price, 998);
+        assert!(book.best_bid().is_none());
+    }
+
+    // --- purge_expired: 空の book では何も返さない ---
+
+    #[test]
+    fn purge_expired_on_empty_book_returns_empty() {
+        let mut book = OrderBook::new();
+        let expired = book.purge_expired(u64::MAX);
+        assert!(expired.is_empty());
+    }
+
+    // --- purge_expired: 全 GTD が期限切れ ---
+
+    #[test]
+    fn purge_expired_removes_all_gtd_when_all_expired() {
+        let mut book = OrderBook::new();
+        book.insert_with_time(gtd(1, Side::Bid, 990, 5, 0, 100), 0);
+        book.insert_with_time(gtd(2, Side::Ask, 1010, 5, 1, 200), 0);
+
+        let expired = book.purge_expired(1000);
+        assert_eq!(expired.len(), 2);
+        assert!(book.best_bid().is_none());
+        assert!(book.best_ask().is_none());
+    }
+
+    // --- OrderBook::default ---
+
+    #[test]
+    fn order_book_default_is_empty() {
+        let book = OrderBook::default();
+        assert!(book.best_bid().is_none());
+        assert!(book.best_ask().is_none());
+    }
+
+    // --- PriceLevel ---
+
+    #[test]
+    fn price_level_new_is_empty() {
+        let lvl = PriceLevel::new(1000);
+        assert_eq!(lvl.price, 1000);
+        assert_eq!(lvl.total_quantity, 0);
+        assert!(lvl.is_empty());
+    }
+
+    #[test]
+    fn price_level_push_updates_total_quantity() {
+        let mut lvl = PriceLevel::new(1000);
+        let order = Order {
+            id: OrderId(1),
+            side: Side::Ask,
+            order_type: OrderType::Limit,
+            price: 1000,
+            quantity: 15,
+            filled_quantity: 5,
+            timestamp_ns: 0,
+            time_in_force: TimeInForce::GTC,
+        };
+        lvl.push(order);
+        // remaining = 15 - 5 = 10
+        assert_eq!(lvl.total_quantity, 10);
+        assert!(!lvl.is_empty());
+    }
+
+    // --- StopLimit 注文が rest される ---
+
+    #[test]
+    fn stop_limit_order_rests_on_book() {
+        let mut book = OrderBook::new();
+        let sl = Order {
+            id: OrderId(1),
+            side: Side::Bid,
+            order_type: OrderType::StopLimit { stop_price: 980 },
+            price: 990,
+            quantity: 10,
+            filled_quantity: 0,
+            timestamp_ns: 0,
+            time_in_force: TimeInForce::GTC,
+        };
+        let fills = book.insert(sl);
+        assert!(fills.is_empty());
+        assert_eq!(book.best_bid(), Some(990));
+    }
+
+    // --- GTD insert_with_time: now_ns = 0 → 期限チェックをスキップ ---
+
+    #[test]
+    fn insert_with_time_zero_skips_expiry_check() {
+        let mut book = OrderBook::new();
+        // expiry_ns = 1 だが now_ns = 0 → チェックなしで rest する
+        let fills = book.insert_with_time(gtd(1, Side::Bid, 990, 10, 0, 1), 0);
+        assert!(fills.is_empty());
+        assert_eq!(book.best_bid(), Some(990));
     }
 
     // --- property-based tests ---

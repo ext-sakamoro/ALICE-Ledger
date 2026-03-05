@@ -41,7 +41,7 @@ impl Position {
     /// Create a flat (zero) position for the given symbol hash.
     #[inline(always)]
     #[must_use]
-    pub fn new(symbol_hash: u64) -> Self {
+    pub const fn new(symbol_hash: u64) -> Self {
         Self {
             symbol_hash,
             net_quantity: 0,
@@ -119,7 +119,6 @@ impl PositionTracker {
             let denominator = i128::from(new_net);
             // Denominator is guaranteed non-zero when same_direction and new_net != 0.
             pos.avg_entry_price = (numerator / denominator) as i64;
-            pos.net_quantity = new_net;
         } else {
             // Reducing or flipping the position.
             let close_qty = prev_net.unsigned_abs().min(fill.quantity);
@@ -144,8 +143,8 @@ impl PositionTracker {
                 pos.avg_entry_price = fill.price;
             }
             // If partially closed without flipping, avg_entry_price remains unchanged.
-            pos.net_quantity = new_net;
         }
+        pos.net_quantity = new_net;
     }
 
     /// Revalue the unrealized P&L for a position at `current_price`.
@@ -344,6 +343,219 @@ mod tests {
         assert!(tracker.get(0xCAFE_BABE).is_none());
     }
 
+    // --- Position::new ---
+
+    #[test]
+    fn position_new_is_flat() {
+        let pos = Position::new(SYM);
+        assert_eq!(pos.symbol_hash, SYM);
+        assert_eq!(pos.net_quantity, 0);
+        assert_eq!(pos.avg_entry_price, 0);
+        assert_eq!(pos.realized_pnl, 0);
+        assert_eq!(pos.unrealized_pnl, 0);
+        assert_eq!(pos.trade_count, 0);
+    }
+
+    // --- PositionTracker::default ---
+
+    #[test]
+    fn tracker_default_is_empty() {
+        let tracker = PositionTracker::default();
+        assert!(tracker.get(SYM).is_none());
+    }
+
+    // --- trade_count は正確に追跡される ---
+
+    #[test]
+    fn trade_count_increments_per_fill() {
+        let mut tracker = PositionTracker::new();
+        tracker.apply_fill(SYM, &fill(1000, 5), Side::Bid);
+        tracker.apply_fill(SYM, &fill(1010, 3), Side::Bid);
+        tracker.apply_fill(SYM, &fill(1020, 2), Side::Ask);
+        let pos = tracker.get(SYM).unwrap();
+        assert_eq!(pos.trade_count, 3);
+    }
+
+    // --- 複数銘柄の独立性 ---
+
+    #[test]
+    fn multiple_symbols_are_independent() {
+        const SYM_A: u64 = 0x0001;
+        const SYM_B: u64 = 0x0002;
+        let mut tracker = PositionTracker::new();
+        tracker.apply_fill(SYM_A, &fill(1000, 10), Side::Bid);
+        tracker.apply_fill(SYM_B, &fill(2000, 5), Side::Ask);
+
+        let a = tracker.get(SYM_A).unwrap();
+        assert_eq!(a.net_quantity, 10);
+        assert_eq!(a.avg_entry_price, 1000);
+
+        let b = tracker.get(SYM_B).unwrap();
+        assert_eq!(b.net_quantity, -5);
+        assert_eq!(b.avg_entry_price, 2000);
+    }
+
+    // --- short ポジションへの追加 ---
+
+    #[test]
+    fn add_to_short_updates_average_entry() {
+        let mut tracker = PositionTracker::new();
+        tracker.apply_fill(SYM, &fill(1000, 10), Side::Ask); // short 10 @ 1000
+        tracker.apply_fill(SYM, &fill(990, 10), Side::Ask); // short 10 @ 990
+
+        let pos = tracker.get(SYM).unwrap();
+        assert_eq!(pos.net_quantity, -20);
+        // 加重平均: (10*1000 + 10*990) / 20 = 995
+        assert_eq!(pos.avg_entry_price, 995);
+    }
+
+    // --- short のパーシャルクローズ ---
+
+    #[test]
+    fn partial_close_short_realizes_pnl() {
+        let mut tracker = PositionTracker::new();
+        tracker.apply_fill(SYM, &fill(1000, 10), Side::Ask); // short 10 @ 1000
+        tracker.apply_fill(SYM, &fill(990, 5), Side::Bid); // cover 5 @ 990
+
+        let pos = tracker.get(SYM).unwrap();
+        assert_eq!(pos.net_quantity, -5);
+        assert_eq!(pos.avg_entry_price, 1000); // 残りのショートは不変
+        assert_eq!(pos.realized_pnl, 50); // 5 * (1000 - 990)
+    }
+
+    // --- short のフルクローズ ---
+
+    #[test]
+    fn full_close_short_flattens_position() {
+        let mut tracker = PositionTracker::new();
+        tracker.apply_fill(SYM, &fill(1000, 10), Side::Ask);
+        tracker.apply_fill(SYM, &fill(980, 10), Side::Bid);
+
+        let pos = tracker.get(SYM).unwrap();
+        assert_eq!(pos.net_quantity, 0);
+        assert_eq!(pos.avg_entry_price, 0);
+        assert_eq!(pos.realized_pnl, 200); // 10 * (1000 - 980)
+        assert_eq!(pos.unrealized_pnl, 0);
+    }
+
+    // --- short → long flip ---
+
+    #[test]
+    fn flip_short_to_long() {
+        let mut tracker = PositionTracker::new();
+        tracker.apply_fill(SYM, &fill(1000, 10), Side::Ask); // short 10
+        tracker.apply_fill(SYM, &fill(995, 15), Side::Bid); // buy 15 → close 10 + open 5 long
+
+        let pos = tracker.get(SYM).unwrap();
+        assert_eq!(pos.net_quantity, 5);
+        assert_eq!(pos.avg_entry_price, 995);
+        assert_eq!(pos.realized_pnl, 50); // 10 * (1000 - 995)
+    }
+
+    // --- 損失が出る long クローズ ---
+
+    #[test]
+    fn close_long_with_loss() {
+        let mut tracker = PositionTracker::new();
+        tracker.apply_fill(SYM, &fill(1000, 10), Side::Bid); // long 10 @ 1000
+        tracker.apply_fill(SYM, &fill(990, 10), Side::Ask); // sell @ 990 (損失)
+
+        let pos = tracker.get(SYM).unwrap();
+        assert_eq!(pos.net_quantity, 0);
+        assert_eq!(pos.realized_pnl, -100); // 10 * (990 - 1000)
+    }
+
+    // --- 損失が出る short クローズ ---
+
+    #[test]
+    fn close_short_with_loss() {
+        let mut tracker = PositionTracker::new();
+        tracker.apply_fill(SYM, &fill(1000, 10), Side::Ask); // short 10 @ 1000
+        tracker.apply_fill(SYM, &fill(1020, 10), Side::Bid); // cover @ 1020 (損失)
+
+        let pos = tracker.get(SYM).unwrap();
+        assert_eq!(pos.net_quantity, 0);
+        assert_eq!(pos.realized_pnl, -200); // 10 * (1000 - 1020)
+    }
+
+    // --- mark_to_market: short 損失 ---
+
+    #[test]
+    fn mark_to_market_short_loss() {
+        let mut tracker = PositionTracker::new();
+        tracker.apply_fill(SYM, &fill(1000, 10), Side::Ask);
+        tracker.mark_to_market(SYM, 1010);
+
+        let pos = tracker.get(SYM).unwrap();
+        // -10 * (1010 - 1000) = -100
+        assert_eq!(pos.unrealized_pnl, -100);
+    }
+
+    // --- mark_to_market: 価格が変わらない場合 ---
+
+    #[test]
+    fn mark_to_market_at_entry_price_is_zero() {
+        let mut tracker = PositionTracker::new();
+        tracker.apply_fill(SYM, &fill(1000, 5), Side::Bid);
+        tracker.mark_to_market(SYM, 1000);
+
+        let pos = tracker.get(SYM).unwrap();
+        assert_eq!(pos.unrealized_pnl, 0);
+    }
+
+    // --- mark_to_market: 存在しない銘柄は何もしない ---
+
+    #[test]
+    fn mark_to_market_unknown_symbol_is_noop() {
+        let mut tracker = PositionTracker::new();
+        // 何も追加せず mark_to_market を呼ぶ → クラッシュしないこと
+        tracker.mark_to_market(0xDEAD, 9999);
+        assert!(tracker.get(0xDEAD).is_none());
+    }
+
+    // --- mark_to_market: 連続して呼ぶと上書きされる ---
+
+    #[test]
+    fn mark_to_market_overwrites_previous_unrealized() {
+        let mut tracker = PositionTracker::new();
+        tracker.apply_fill(SYM, &fill(1000, 10), Side::Bid);
+        tracker.mark_to_market(SYM, 1005);
+        tracker.mark_to_market(SYM, 995);
+
+        let pos = tracker.get(SYM).unwrap();
+        assert_eq!(pos.unrealized_pnl, -50); // 10 * (995 - 1000)
+    }
+
+    // --- realized + unrealized の組み合わせ ---
+
+    #[test]
+    fn realized_and_unrealized_coexist() {
+        let mut tracker = PositionTracker::new();
+        tracker.apply_fill(SYM, &fill(1000, 20), Side::Bid); // long 20 @ 1000
+        tracker.apply_fill(SYM, &fill(1010, 10), Side::Ask); // close 10 (realized = 100)
+        tracker.mark_to_market(SYM, 1020); // 残り 10 @ unrealized = 200
+
+        let pos = tracker.get(SYM).unwrap();
+        assert_eq!(pos.net_quantity, 10);
+        assert_eq!(pos.realized_pnl, 100);
+        assert_eq!(pos.unrealized_pnl, 200);
+    }
+
+    // --- 累積 realized P&L (複数クローズ) ---
+
+    #[test]
+    fn realized_pnl_accumulates_across_multiple_closes() {
+        let mut tracker = PositionTracker::new();
+        tracker.apply_fill(SYM, &fill(1000, 30), Side::Bid); // long 30 @ 1000
+        tracker.apply_fill(SYM, &fill(1010, 10), Side::Ask); // +100 realized
+        tracker.apply_fill(SYM, &fill(1020, 10), Side::Ask); // +200 realized
+        tracker.apply_fill(SYM, &fill(1030, 10), Side::Ask); // +300 realized
+
+        let pos = tracker.get(SYM).unwrap();
+        assert_eq!(pos.net_quantity, 0);
+        assert_eq!(pos.realized_pnl, 600);
+    }
+
     // --- property-based tests ---
 
     use proptest::prelude::*;
@@ -368,8 +580,8 @@ mod tests {
             let pos = tracker.get(SYM).unwrap();
 
             // Reference calculation using i128 to avoid overflow.
-            let numerator = (p1 as i128) * (q1 as i128) + (p2 as i128) * (q2 as i128);
-            let denominator = (q1 + q2) as i128;
+            let numerator = i128::from(p1) * i128::from(q1) + i128::from(p2) * i128::from(q2);
+            let denominator = i128::from(q1 + q2);
             let expected_avg = (numerator / denominator) as i64;
 
             prop_assert_eq!(
@@ -417,8 +629,8 @@ mod tests {
             tracker.mark_to_market(SYM, mark_price);
 
             let pos = tracker.get(SYM).unwrap();
-            let expected = (pos.net_quantity as i128)
-                .saturating_mul((mark_price - pos.avg_entry_price) as i128)
+            let expected = i128::from(pos.net_quantity)
+                .saturating_mul(i128::from(mark_price - pos.avg_entry_price))
                 as i64;
 
             prop_assert_eq!(

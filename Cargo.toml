@@ -1,6 +1,6 @@
 [package]
 name = "alice-ledger"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Moroya Sakamoto"]
 description = "Order book, matching engine, and position management for financial systems"
@@ -9,14 +9,19 @@ publish = false
 
 [lib]
 name = "alice_ledger"
-crate-type = ["rlib"]
+crate-type = ["rlib", "staticlib", "cdylib"]
 
 [features]
 default = ["std"]
 std = []
+# C-ABI FFI for Unity/UE5
+ffi = ["std"]
 
 [dependencies]
 alice-sync = { path = "../ALICE-Sync", features = ["telemetry"] }
+
+[dev-dependencies]
+proptest = "1.4"
 
 [profile.release]
 opt-level = 3

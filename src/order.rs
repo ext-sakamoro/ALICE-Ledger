@@ -77,12 +77,14 @@ pub struct Order {
 impl Order {
     /// Quantity that has not yet been matched.
     #[inline(always)]
+    #[must_use]
     pub fn remaining(&self) -> u64 {
         self.quantity - self.filled_quantity
     }
 
     /// Returns `true` when the entire requested quantity has been matched.
     #[inline(always)]
+    #[must_use]
     pub fn is_filled(&self) -> bool {
         self.filled_quantity >= self.quantity
     }

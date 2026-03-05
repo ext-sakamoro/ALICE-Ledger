@@ -1,2 +1,6 @@
+# Claude Code
+CLAUDE.md
+.claude/
+
 /target/
 Cargo.lock

@@ -40,6 +40,7 @@ pub struct Position {
 impl Position {
     /// Create a flat (zero) position for the given symbol hash.
     #[inline(always)]
+    #[must_use]
     pub fn new(symbol_hash: u64) -> Self {
         Self {
             symbol_hash,
@@ -65,6 +66,7 @@ pub struct PositionTracker {
 impl PositionTracker {
     /// Create an empty position tracker.
     #[inline(always)]
+    #[must_use]
     pub fn new() -> Self {
         Self {
             positions: HashMap::new(),
@@ -73,6 +75,7 @@ impl PositionTracker {
 
     /// Retrieve a position by symbol hash.
     #[inline(always)]
+    #[must_use]
     pub fn get(&self, symbol_hash: u64) -> Option<&Position> {
         self.positions.get(&symbol_hash)
     }
@@ -110,10 +113,10 @@ impl PositionTracker {
             // Adding to an existing position — update weighted average entry.
             // avg = (prev_net * prev_avg + delta * fill_price) / new_net
             // Use i128 to prevent overflow during the multiplication.
-            let numerator = (prev_net as i128)
-                .saturating_mul(pos.avg_entry_price as i128)
-                .saturating_add((signed_qty as i128).saturating_mul(fill.price as i128));
-            let denominator = new_net as i128;
+            let numerator = i128::from(prev_net)
+                .saturating_mul(i128::from(pos.avg_entry_price))
+                .saturating_add(i128::from(signed_qty).saturating_mul(i128::from(fill.price)));
+            let denominator = i128::from(new_net);
             // Denominator is guaranteed non-zero when same_direction and new_net != 0.
             pos.avg_entry_price = (numerator / denominator) as i64;
             pos.net_quantity = new_net;
@@ -147,7 +150,7 @@ impl PositionTracker {
 
     /// Revalue the unrealized P&L for a position at `current_price`.
     ///
-    /// Unrealized P&L = net_quantity * (current_price - avg_entry_price).
+    /// Unrealized P&L = `net_quantity` * (`current_price` - `avg_entry_price`).
     /// A positive value means the position is profitable; negative means a loss.
     #[inline(always)]
     pub fn mark_to_market(&mut self, symbol_hash: u64, current_price: i64) {
@@ -157,8 +160,8 @@ impl PositionTracker {
                 return;
             }
             // Use i128 to avoid overflow on large positions.
-            let pnl = (pos.net_quantity as i128)
-                .saturating_mul((current_price - pos.avg_entry_price) as i128);
+            let pnl = i128::from(pos.net_quantity)
+                .saturating_mul(i128::from(current_price - pos.avg_entry_price));
             pos.unrealized_pnl = pnl as i64;
         }
     }
@@ -339,5 +342,90 @@ mod tests {
     fn get_unknown_symbol_returns_none() {
         let tracker = PositionTracker::new();
         assert!(tracker.get(0xCAFE_BABE).is_none());
+    }
+
+    // --- property-based tests ---
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Same-direction average entry: after two buys at prices p1 (qty q1)
+        /// and p2 (qty q2), avg_entry == (p1*q1 + p2*q2) / (q1+q2).
+        ///
+        /// Prices and quantities are kept small to avoid i64 overflow in the
+        /// reference formula while still exercising the implementation.
+        #[test]
+        fn prop_same_direction_weighted_average_entry(
+            p1 in 1_i64..=100_000_i64,
+            q1 in 1_u64..=10_000_u64,
+            p2 in 1_i64..=100_000_i64,
+            q2 in 1_u64..=10_000_u64,
+        ) {
+            let mut tracker = PositionTracker::new();
+            tracker.apply_fill(SYM, &fill(p1, q1), Side::Bid);
+            tracker.apply_fill(SYM, &fill(p2, q2), Side::Bid);
+
+            let pos = tracker.get(SYM).unwrap();
+
+            // Reference calculation using i128 to avoid overflow.
+            let numerator = (p1 as i128) * (q1 as i128) + (p2 as i128) * (q2 as i128);
+            let denominator = (q1 + q2) as i128;
+            let expected_avg = (numerator / denominator) as i64;
+
+            prop_assert_eq!(
+                pos.avg_entry_price, expected_avg,
+                "avg_entry mismatch: p1={} q1={} p2={} q2={}",
+                p1, q1, p2, q2
+            );
+            prop_assert_eq!(pos.net_quantity, (q1 + q2) as i64);
+        }
+
+        /// Flat position zero unrealized: when net_quantity == 0, calling
+        /// mark_to_market must leave unrealized_pnl == 0 regardless of price.
+        #[test]
+        fn prop_flat_position_zero_unrealized(
+            entry_price in 1_i64..=100_000_i64,
+            qty in 1_u64..=10_000_u64,
+            mark_price in 1_i64..=200_000_i64,
+        ) {
+            let mut tracker = PositionTracker::new();
+            // Open and immediately close a long position to reach flat.
+            tracker.apply_fill(SYM, &fill(entry_price, qty), Side::Bid);
+            tracker.apply_fill(SYM, &fill(entry_price, qty), Side::Ask);
+
+            tracker.mark_to_market(SYM, mark_price);
+
+            let pos = tracker.get(SYM).unwrap();
+            prop_assert_eq!(pos.net_quantity, 0);
+            prop_assert_eq!(
+                pos.unrealized_pnl, 0,
+                "{}",
+                "flat position must have zero unrealized P&L at any mark price"
+            );
+        }
+
+        /// Mark-to-market formula: after mark_to_market, unrealized_pnl must
+        /// equal net_quantity * (current_price - avg_entry_price).
+        #[test]
+        fn prop_mark_to_market_formula(
+            entry_price in 1_i64..=10_000_i64,
+            qty in 1_u64..=1_000_u64,
+            mark_price in 1_i64..=20_000_i64,
+        ) {
+            let mut tracker = PositionTracker::new();
+            tracker.apply_fill(SYM, &fill(entry_price, qty), Side::Bid);
+            tracker.mark_to_market(SYM, mark_price);
+
+            let pos = tracker.get(SYM).unwrap();
+            let expected = (pos.net_quantity as i128)
+                .saturating_mul((mark_price - pos.avg_entry_price) as i128)
+                as i64;
+
+            prop_assert_eq!(
+                pos.unrealized_pnl, expected,
+                "unrealized_pnl must equal net_qty * (mark - avg_entry); qty={} entry={} mark={}",
+                qty, entry_price, mark_price
+            );
+        }
     }
 }

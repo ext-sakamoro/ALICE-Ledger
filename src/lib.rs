@@ -1,3 +1,10 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::inline_always
+)]
 /*
     ALICE-Ledger
     Copyright (C) 2026 Moroya Sakamoto
@@ -68,6 +75,8 @@
 //! ```
 
 pub mod book;
+#[cfg(feature = "ffi")]
+pub mod ffi;
 pub mod order;
 pub mod position;
 

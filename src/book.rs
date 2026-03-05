@@ -55,6 +55,7 @@ pub struct PriceLevel {
 impl PriceLevel {
     /// Create an empty price level at the given tick price.
     #[inline(always)]
+    #[must_use]
     pub fn new(price: i64) -> Self {
         Self {
             price,
@@ -72,6 +73,7 @@ impl PriceLevel {
 
     /// Returns `true` when no resting orders remain at this level.
     #[inline(always)]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.orders.is_empty()
     }
@@ -94,6 +96,7 @@ pub struct OrderBook {
 impl OrderBook {
     /// Create a new, empty order book.
     #[inline(always)]
+    #[must_use]
     pub fn new() -> Self {
         Self {
             bids: BTreeMap::new(),
@@ -104,18 +107,21 @@ impl OrderBook {
 
     /// Best bid price (highest) in ticks, or `None` if the bid side is empty.
     #[inline(always)]
+    #[must_use]
     pub fn best_bid(&self) -> Option<i64> {
         self.bids.keys().next().map(|r| r.0)
     }
 
     /// Best ask price (lowest) in ticks, or `None` if the ask side is empty.
     #[inline(always)]
+    #[must_use]
     pub fn best_ask(&self) -> Option<i64> {
         self.asks.keys().next().copied()
     }
 
     /// Bid-ask spread in ticks, or `None` when either side is empty.
     #[inline(always)]
+    #[must_use]
     pub fn spread(&self) -> Option<i64> {
         match (self.best_ask(), self.best_bid()) {
             (Some(ask), Some(bid)) => Some(ask - bid),
@@ -126,6 +132,7 @@ impl OrderBook {
     /// Return up to `levels` price levels on `side` as `(price, quantity)` pairs.
     ///
     /// Bids are returned in descending price order; asks in ascending price order.
+    #[must_use]
     pub fn depth(&self, side: Side, levels: usize) -> Vec<(i64, u64)> {
         match side {
             Side::Bid => self
@@ -219,13 +226,17 @@ impl OrderBook {
         if let Some(ref order) = cancelled {
             match side {
                 Side::Bid => {
-                    if self.bids.get(&Reverse(price)).is_none_or(|l| l.is_empty()) {
+                    if self
+                        .bids
+                        .get(&Reverse(price))
+                        .is_none_or(PriceLevel::is_empty)
+                    {
                         self.bids.remove(&Reverse(price));
                     }
                     let _ = order; // already moved
                 }
                 Side::Ask => {
-                    if self.asks.get(&price).is_none_or(|l| l.is_empty()) {
+                    if self.asks.get(&price).is_none_or(PriceLevel::is_empty) {
                         self.asks.remove(&price);
                     }
                 }
@@ -313,7 +324,7 @@ impl OrderBook {
                 &mut self.order_index,
             );
             // Remove the level if exhausted.
-            if self.asks.get(&ask_price).is_some_and(|l| l.is_empty()) {
+            if self.asks.get(&ask_price).is_some_and(PriceLevel::is_empty) {
                 self.asks.remove(&ask_price);
             }
         }
@@ -354,7 +365,7 @@ impl OrderBook {
             if self
                 .bids
                 .get(&Reverse(bid_price))
-                .is_some_and(|l| l.is_empty())
+                .is_some_and(PriceLevel::is_empty)
             {
                 self.bids.remove(&Reverse(bid_price));
             }
@@ -858,5 +869,92 @@ mod tests {
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].price, 1000);
         assert_eq!(fills[0].quantity, 10);
+    }
+
+    // --- property-based tests ---
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// FIFO priority: two ask orders at the same price; the taker buy must
+        /// fill the earliest-inserted (lowest id) maker first.
+        #[test]
+        fn prop_fifo_same_price_earliest_filled_first(
+            price in 1_i64..=10_000_i64,
+            qty in 1_u64..=100_u64,
+        ) {
+            let mut book = OrderBook::new();
+            // Order 1 inserted earlier (ts=0), order 2 inserted later (ts=1).
+            book.insert(limit(1, Side::Ask, price, qty, 0));
+            book.insert(limit(2, Side::Ask, price, qty, 1));
+
+            // Taker buys exactly `qty` lots — should fill against order 1 only.
+            let fills = book.insert(market(3, Side::Bid, qty));
+
+            prop_assert!(!fills.is_empty(), "expected at least one fill");
+            prop_assert_eq!(
+                fills[0].maker_id,
+                OrderId(1),
+                "{}",
+                "first fill must come from the earliest-resting order"
+            );
+        }
+
+        /// Fill at maker price: when a market bid fills against a resting ask,
+        /// every fill's price must equal the ask's limit price, not the taker's.
+        #[test]
+        fn prop_fill_price_equals_maker_price(
+            ask_price in 1_i64..=10_000_i64,
+            qty in 1_u64..=100_u64,
+        ) {
+            let mut book = OrderBook::new();
+            book.insert(limit(1, Side::Ask, ask_price, qty, 0));
+
+            // Market bid — price field is irrelevant for matching but let's
+            // set it to something larger than the ask to guarantee a match.
+            let fills = book.insert(market(2, Side::Bid, qty));
+
+            prop_assert!(!fills.is_empty());
+            for f in &fills {
+                prop_assert_eq!(
+                    f.price, ask_price,
+                    "{}",
+                    "fill price must equal the maker's ask price"
+                );
+            }
+        }
+
+        /// FOK atomicity: a FOK order that cannot be completely filled must
+        /// produce zero fills (no partial execution).
+        #[test]
+        fn prop_fok_no_partial_fill(
+            ask_qty in 1_u64..=99_u64,
+            // FOK wants strictly more than available, so demand = ask_qty + 1..=200
+            extra in 1_u64..=100_u64,
+            price in 1_i64..=10_000_i64,
+        ) {
+            let fok_qty = ask_qty + extra; // guaranteed > ask_qty
+
+            let mut book = OrderBook::new();
+            book.insert(limit(1, Side::Ask, price, ask_qty, 0));
+
+            let fok = Order {
+                id: OrderId(2),
+                side: Side::Bid,
+                order_type: OrderType::Limit,
+                price,
+                quantity: fok_qty,
+                filled_quantity: 0,
+                timestamp_ns: 0,
+                time_in_force: TimeInForce::FOK,
+            };
+            let fills = book.insert(fok);
+
+            prop_assert!(
+                fills.is_empty(),
+                "FOK that cannot fill completely must produce zero fills; ask_qty={}, fok_qty={}",
+                ask_qty, fok_qty
+            );
+        }
     }
 }

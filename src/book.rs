@@ -290,6 +290,23 @@ impl OrderBook {
         expired
     }
 
+    /// Collect all resting order IDs for a given side.
+    #[must_use]
+    pub fn all_order_ids_by_side(&self, side: Side) -> Vec<OrderId> {
+        match side {
+            Side::Bid => self
+                .bids
+                .values()
+                .flat_map(|level| level.orders.iter().map(|o| o.id))
+                .collect(),
+            Side::Ask => self
+                .asks
+                .values()
+                .flat_map(|level| level.orders.iter().map(|o| o.id))
+                .collect(),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Private matching helpers
     // -----------------------------------------------------------------------

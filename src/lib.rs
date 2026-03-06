@@ -75,10 +75,13 @@
 //! ```
 
 pub mod book;
+pub mod bulk;
 #[cfg(feature = "ffi")]
 pub mod ffi;
 pub mod order;
 pub mod position;
+pub mod post_only;
+pub mod risk;
 
 // Re-export the most commonly used types at the crate root for ergonomics.
 pub use book::{Fill, OrderBook, PriceLevel};

@@ -2,7 +2,7 @@
 name = "alice-ledger"
 version = "0.1.1"
 edition = "2021"
-authors = ["Moroya Sakamoto"]
+authors = ["Moroya Sakamoto <sakamoro@alicelaw.net>"]
 description = "Order book, matching engine, and position management for financial systems"
 license = "AGPL-3.0-only"
 publish = false

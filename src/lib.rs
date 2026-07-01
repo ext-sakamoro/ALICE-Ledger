@@ -10,7 +10,12 @@
     clippy::too_long_first_doc_paragraph,
     clippy::missing_panics_doc,
     clippy::cast_lossless,
-    clippy::manual_let_else
+    clippy::manual_let_else,
+    clippy::bool_to_int_with_if,
+    clippy::borrow_as_ptr,
+    clippy::option_if_let_else,
+    clippy::ptr_as_ptr,
+    clippy::ref_as_ptr
 )]
 /*
     ALICE-Ledger

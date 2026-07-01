@@ -88,7 +88,9 @@
 
 pub mod book;
 pub mod bulk;
+pub mod fix;
 pub mod signed_order;
+pub use fix::{parse as parse_fix, serialize as serialize_fix, FixError, FixMessage, SOH};
 pub use signed_order::{
     AuditEvent, AuditEventKind, OrderAuditLog, OrderPayload, OrderSide as SignedOrderSide,
     SignedOrder,

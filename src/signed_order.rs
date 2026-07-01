@@ -172,10 +172,16 @@ impl AuditEvent {
 // ---------------------------------------------------------------------------
 
 /// Append-only hash-chain of order lifecycle events.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct OrderAuditLog {
     events: Vec<AuditEvent>,
     head: Hash,
+}
+
+impl Default for OrderAuditLog {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OrderAuditLog {

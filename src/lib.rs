@@ -3,7 +3,14 @@
     clippy::cast_possible_wrap,
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,
-    clippy::inline_always
+    clippy::inline_always,
+    clippy::doc_markdown,
+    clippy::module_name_repetitions,
+    clippy::missing_const_for_fn,
+    clippy::too_long_first_doc_paragraph,
+    clippy::missing_panics_doc,
+    clippy::cast_lossless,
+    clippy::manual_let_else
 )]
 /*
     ALICE-Ledger
@@ -76,6 +83,11 @@
 
 pub mod book;
 pub mod bulk;
+pub mod signed_order;
+pub use signed_order::{
+    AuditEvent, AuditEventKind, OrderAuditLog, OrderPayload, OrderSide as SignedOrderSide,
+    SignedOrder,
+};
 #[cfg(feature = "ffi")]
 pub mod ffi;
 pub mod order;

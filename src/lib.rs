@@ -100,6 +100,7 @@ pub mod ffi;
 pub mod order;
 pub mod position;
 pub mod post_only;
+pub mod prelude;
 pub mod risk;
 
 // Re-export the most commonly used types at the crate root for ergonomics.

@@ -97,4 +97,16 @@ Prefix: `al_ldg_*`
 
 ## License
 
-AGPL-3.0-only — Copyright (C) 2026 Moroya Sakamoto
+`AGPL-3.0-only OR LicenseRef-Commercial` — dual-licensed. Pick either.
+
+| Option | Terms | Use it when |
+|--------|-------|-------------|
+| **AGPL-3.0-only** | [LICENSE-AGPL](LICENSE-AGPL) — free, no reporting obligation | Your project is itself AGPL-compatible open source, or you are only using it internally |
+| **Commercial License** | [LICENSE-COMMERCIAL.md](LICENSE-COMMERCIAL.md) — paid, removes the copyleft | Closed-source product, proprietary SaaS, edge / firmware distribution, plugin redistribution, or a platform NDA that forbids source disclosure |
+
+AGPL is a strong copyleft: a product, firmware image, or service that links
+`alice-ledger` and is distributed or served to users must be released under the AGPL
+as well. That is intentional for the open ecosystem, and the Commercial
+License exists for the cases where it is not something you are able to do.
+
+Commercial licence enquiries: <contact@extoria.co.jp>

@@ -6,7 +6,7 @@
 //! captured in an append-only [`OrderAuditLog`] whose head hash can be
 //! anchored into an external ledger.
 
-use alice_blockchain::{hash_data, Hash, KeyPair, PublicKey, Signature};
+use alice_sign::{hash_data, Hash, KeyPair, PublicKey, Signature};
 
 // ---------------------------------------------------------------------------
 // OrderSide / OrderPayload

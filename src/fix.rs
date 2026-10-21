@@ -3,7 +3,7 @@
 //! Handles the wire representation `tag=value` records separated by `SOH`
 //! (`0x01`), the required envelope fields (`8` = `BeginString`, `9` =
 //! `BodyLength`, `10` = `CheckSum`), and typed access to the subset of tags
-//! required by SPACID / MiFID-II reporting scenarios:
+//! required by MiFID-II reporting scenarios:
 //!
 //! - `NewOrderSingle` (`35=D`)
 //! - `ExecutionReport` (`35=8`)

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'ci/**']
   pull_request:
     branches: [main]
 
@@ -32,3 +32,41 @@ jobs:
           fail_level: error
           reporter: github-check
 
+  test:
+    name: Test (public siblings)
+    runs-on: ubuntu-latest
+    env:
+      # the passed-test count of the feature set below at the commit that set it;
+      # fewer passed tests (a removed or skipped test, or none at all) is a failure
+      MIN_PASSED: "168"
+    steps:
+      # cargo reads the manifest of every path dependency, optional ones included, so
+      # each sibling is checked out next to this repository at a fixed commit with the
+      # workflow's own token: a sibling that is not public cannot be checked out
+      - uses: actions/checkout@v5
+        with:
+          path: ALICE-Ledger
+      - uses: actions/checkout@v5
+        with:
+          repository: ext-sakamoro/ALICE-Sync
+          ref: f5117e6505607ba260605b8ee40a2b5f044c3685
+          path: ALICE-Sync
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test (lib, integration, doctests)
+        working-directory: ALICE-Ledger
+        run: |
+          # the default shell has no pipefail: without it cargo's exit status is lost in the pipe
+          set -o pipefail
+          log="$(mktemp)"
+          cargo test --all-features 2>&1 | tee "${log}"
+          passed=$(grep -E '^test result: ' "${log}" | awk '{s += $4} END {print s + 0}')
+          failed=$(grep -E '^test result: ' "${log}" | awk '{s += $6} END {print s + 0}')
+          echo "passed: ${passed} (minimum ${MIN_PASSED}), failed: ${failed}"
+          if [ "${failed}" -ne 0 ] || grep -E '^test result: ' "${log}" | grep -vE '^test result: ok\. ' >/dev/null; then
+            echo "::error::${failed} tests failed"
+            exit 1
+          fi
+          if [ "${passed}" -lt "${MIN_PASSED}" ]; then
+            echo "::error::${passed} tests passed, fewer than ${MIN_PASSED}"
+            exit 1
+          fi

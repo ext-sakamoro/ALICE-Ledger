@@ -10,7 +10,7 @@ All notable changes to ALICE-Ledger will be documented in this file.
 ### Changed
 - Licence: `AGPL-3.0-only OR LicenseRef-Commercial` → `LicenseRef-Proprietary`
 - Ed25519 の署名・検証と SHA-256 (`hash_data` / `Hash`) を `alice-sign` (MIT OR Apache-2.0、公開) から取るようにした 鍵・署名・hash の byte 列は同じ
-- **License: `AGPL-3.0-only` → `AGPL-3.0-only OR LicenseRef-Commercial` (dual-licensed、2026-09-27)** AGPL 側の条件は変更なし (既存 AGPL 利用者への影響ゼロ)、商用という選択肢が追加されただけ SPDX が AGPL 単独だと cargo-deny / FOSSA / SBOM に「商用オプションなし」と見えるため宣言を dual に 変更点: SPDX / `LICENSE` → `LICENSE-AGPL` rename / `LICENSE-COMMERCIAL.md` (商用トリガー 6 条件 = クローズド製品・商用 SaaS・エッジ・ファームウェア配布・plugin 再配布・プラットフォーム NDA・保証、社内利用は AGPL 側で無償と明記) / README の選択肢表 商用窓口は法人 `contact@extoria.co.jp`
+- License: `AGPL-3.0-only` → `AGPL-3.0-only OR LicenseRef-Commercial` (2026-09-27)
 - CI: `.github/preflight-exact` を置いた `scripts/preflight.sh` が生成器の出力 (見出しの `generator rev` の版) と byte で一致しなければ送る前の確認が通らない
 - 設定 file の comment を中身の説明だけにし、.gitignore を project の build 出力だけにした
 - ライセンス全文を公式の AGPL v3 に置き換え

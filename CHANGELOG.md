@@ -8,6 +8,8 @@ All notable changes to ALICE-Ledger will be documented in this file.
 - CI: `Test (public siblings)` job `cargo test --all-features` を走らせ、cargo の失敗、失敗した試験、通った試験が 168 件未満のどれでも失敗 `ci/**` の push でも走る `scripts/preflight.sh` は生成し直して同じ step を持つ
 
 ### Changed
+
+- `alice-sign` の git rev を 8a1b00d に上げた (HMAC-SHA256 の追加のみ、使っている API と byte 列は同じ)
 - Licence: `AGPL-3.0-only OR LicenseRef-Commercial` → `LicenseRef-Proprietary`
 - Ed25519 の署名・検証と SHA-256 (`hash_data` / `Hash`) を `alice-sign` (MIT OR Apache-2.0、公開) から取るようにした 鍵・署名・hash の byte 列は同じ
 - License: `AGPL-3.0-only` → `AGPL-3.0-only OR LicenseRef-Commercial` (2026-09-27)

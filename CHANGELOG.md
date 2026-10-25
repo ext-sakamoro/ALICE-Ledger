@@ -12,10 +12,8 @@ All notable changes to ALICE-Ledger will be documented in this file.
 - `alice-sign` の git rev を 8a1b00d に上げた (HMAC-SHA256 の追加のみ、使っている API と byte 列は同じ)
 - Licence: `AGPL-3.0-only OR LicenseRef-Commercial` → `LicenseRef-Proprietary`
 - Ed25519 の署名・検証と SHA-256 (`hash_data` / `Hash`) を `alice-sign` (MIT OR Apache-2.0、公開) から取るようにした 鍵・署名・hash の byte 列は同じ
-- License: `AGPL-3.0-only` → `AGPL-3.0-only OR LicenseRef-Commercial` (2026-09-27)
 - CI: `.github/preflight-exact` を置いた `scripts/preflight.sh` が生成器の出力 (見出しの `generator rev` の版) と byte で一致しなければ送る前の確認が通らない
 - 設定 file の comment を中身の説明だけにし、.gitignore を project の build 出力だけにした
-- ライセンス全文を公式の AGPL v3 に置き換え
 - TRADEMARK_NOTICE が指す licence の file を LICENSE-* の file にした
 
 ## [0.1.1] - 2026-03-04

@@ -9,6 +9,7 @@ All notable changes to ALICE-Ledger will be documented in this file.
 
 ### Changed
 
+- Cargo.lock: alice-db を main に取り直し、alice-db が前に rev で引いていた alice-serial も ALICE-Serial の main branch から (同じ commit 16b34eb) になった
 - 依存: `alice-sync` (path) と `alice-sign` (rev 指定) を ALICE の各 repo の main (git、branch) から取る (`alice-sync` 0.8.0、`alice-sign` 0.1.0) `Cargo.lock` を追跡し、試験は `--locked` で走らせる CI は隣の repo の checkout をやめ、lock の alice-* がすべて git から来て `alice-det-math` が 1 つ以下であることを確かめる step を足した `scripts/preflight.sh` は生成し直した 公開 API は変わらない
 - `alice-sign` の git rev を 8a1b00d に上げた (HMAC-SHA256 の追加のみ、使っている API と byte 列は同じ)
 - Licence: `AGPL-3.0-only OR LicenseRef-Commercial` → `LicenseRef-Proprietary`
